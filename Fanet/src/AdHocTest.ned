@@ -25,7 +25,7 @@ network AodvRealAdhoc5
         radioMedium: <default("UnitDiskRadioMedium")> like IRadioMedium {
             @display("p=900,700");
         }
-        host[5]: <default("WirelessHost")> like INetworkNode {
+        host[5]: <default("WirelessHostWithMetrics")> like INetworkNode {
              parameters:
                 @display("i=device/cellphone");
                 mobility.initFromDisplayString = false;
@@ -34,3 +34,4 @@ network AodvRealAdhoc5
 
         }
 }
+

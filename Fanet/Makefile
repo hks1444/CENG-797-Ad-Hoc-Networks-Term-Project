@@ -2,7 +2,7 @@
 # OMNeT++/OMNEST Makefile for Fanet
 #
 # This file was generated with the command:
-#  opp_makemake -f --deep -O out -KINET4_5_PROJ=../inet4.5 -DINET_IMPORT -I. -I$$\(INET4_5_PROJ\)/src -L$$\(INET4_5_PROJ\)/src -lINET$$\(D\)
+#  opp_makemake -f --deep -O out -KINET4_5_PROJ=../../inet4.5 -DINET_IMPORT -I. -I$$\(INET4_5_PROJ\)/src -L$$\(INET4_5_PROJ\)/src -lINET$$\(D\)
 #
 
 # Name of target to be created (-o option)
@@ -31,7 +31,7 @@ PROJECTRELATIVE_PATH =
 O = $(PROJECT_OUTPUT_DIR)/$(CONFIGNAME)/$(PROJECTRELATIVE_PATH)
 
 # Object files for local .cc, .msg and .sm files
-OBJS =
+OBJS = $O/src/energy/EnergyController.o $O/src/metrics/NodeMetrics.o
 
 # Message files
 MSGFILES =
@@ -40,7 +40,7 @@ MSGFILES =
 SMFILES =
 
 # Other makefile variables (-K)
-INET4_5_PROJ=../inet4.5
+INET4_5_PROJ=../../inet4.5
 
 #------------------------------------------------------------------------------
 
