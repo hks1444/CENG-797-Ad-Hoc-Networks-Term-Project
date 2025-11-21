@@ -10,11 +10,10 @@ void NodeMetrics::initialize()
 {
     period = par("samplePeriod");
     stateSignal = registerSignal("state");
-    // locate common submodules
+    lastS.assign(NUM_METRICS, 0.0);
     mob = getContainingNode(this)->getSubmodule("mobility") ?
           check_and_cast<IMobility*>(getContainingNode(this)->getSubmodule("mobility")) : nullptr;
 
-    // energy model is optional — attach if present
     cModule *energy = getContainingNode(this)->getSubmodule("energyStorage");
     bat = energy ? check_and_cast<power::IEpEnergyStorage*>(energy) : nullptr;
 
@@ -40,23 +39,24 @@ void NodeMetrics::finish()
 
 void NodeMetrics::sample()
 {
-    // collect utilities in [0,1]
     std::vector<double> s;
-    s.reserve(5);
+    s.reserve(NUM_METRICS);
     s.push_back(residualEnergy());
     s.push_back(degreeCentrality());
     s.push_back(velocitySimilarity());
     s.push_back(queueFill());
     //s.push_back(routingCloseness());
-    s.push_back(linkHoldingTime());
+    double lht = linkHoldingTime();
+    s.push_back(lht);
 
-    // record per-utility (optional)
+    lastS = s;
+    lastLht = lht;
+
     if (par("recordPerUtility").boolValue()) {
         for (size_t i = 0; i < s.size(); ++i)
             recordScalar((std::string("s") + std::to_string(i+1)).c_str(), s[i]);
     }
 
-    // entropy of utilities (treat utilities as a distribution)
     double H = entropy(s);
     emit(stateSignal, H);
     recordScalar("stateEntropy", H);
@@ -73,7 +73,6 @@ double NodeMetrics::residualEnergy()
     return std::clamp(r, 0.0, 1.0);
 }
 
-// helper to fetch communication range from our radio
 static double readCommRange(cModule *node)
 {
     cModule *wlan0 = node->getSubmodule("wlan", 0);
@@ -83,7 +82,7 @@ static double readCommRange(cModule *node)
     cModule *tx = radio->getSubmodule("transmitter");
     if (!tx) return 0.0;
     cPar& p = tx->par("communicationRange");
-    return p.doubleValue(); // already in meters
+    return p.doubleValue();
 }
 
 // --- s2: degree centrality (normalized neighbor count) ---
@@ -101,7 +100,6 @@ double NodeMetrics::degreeCentrality()
     cModule *network = getSystemModule();
     for (cModule::SubmoduleIterator it(network); !it.end(); ++it) {
         cModule *m = *it;
-        // look for nodes with a mobility submodule (filter hosts)
         cModule *mobM = m->getSubmodule("mobility");
         if (!mobM) continue;
         if (m == getContainingNode(this)) continue;
@@ -113,7 +111,6 @@ double NodeMetrics::degreeCentrality()
         if (myPos.distance(op) <= R) ++deg;
     }
     if (N <= 0) return 0.0;
-    // normalize by possible max neighbors
     double s = (double)deg / (double)N;
     return std::clamp(s, 0.0, 1.0);
 }
@@ -166,7 +163,7 @@ double NodeMetrics::queueFill()
     auto pq = dynamic_cast<queueing::IPacketQueue*>(q);
     if (!pq) return 0.0;
 
-    int cap = q->par("packetCapacity"); // DropTailQueue has this
+    int cap = q->par("packetCapacity");
     if (cap <= 0) return 0.0;
 
     int len = pq->getNumPackets();
@@ -260,7 +257,7 @@ double NodeMetrics::linkHoldingTime()
 
             double root = std::sqrt(inside);
             double num  = root - (a * b + c * d);
-            double LHTP = num / denom;   // in seconds
+            double LHTP = num / denom;
 
             if (LHTP <= 0)
                 continue;       // link already expiring or invalid
@@ -287,7 +284,7 @@ double NodeMetrics::entropy(const std::vector<double>& s)
         double p = std::max(0.0, x) / sum;
         if (p > 0) H -= p * std::log2(p);
     }
-    // optional: normalize by log2(|s|) to bound to [0,1]
+    // Normalize by log2(|s|) to bound to [0,1]
     double Hmax = std::log2((double)s.size());
     return H;
 }

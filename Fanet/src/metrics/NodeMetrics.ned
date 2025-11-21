@@ -1,5 +1,6 @@
 package src.metrics;
 import src.energy.EnergyController;
+import src.rl.RlAgent;
 simple NodeMetrics
 {
     parameters:
@@ -20,5 +21,9 @@ module AodvRouterWithMetrics extends inet.node.aodv.AodvRouter
             parameters:
                 offThreshold = 0.05; // shut down at 5% energy
                 @display("p=40,25");
+        }
+        rl: RlAgent {
+            parameters:
+                @display("p=120,60");
         }
 }

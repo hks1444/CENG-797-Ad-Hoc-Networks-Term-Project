@@ -9,14 +9,21 @@
 #include "inet/power/contract/IEpEnergyStorage.h"
 #include "inet/queueing/contract/IPacketQueue.h"
 #include "inet/networklayer/ipv4/Ipv4RoutingTable.h"
+#define NUM_METRICS 5
 
 using namespace inet;
+
+struct WeightVector {
+    double w[NUM_METRICS];
+};
 
 class NodeMetrics : public cSimpleModule
 {
   public:
     NodeMetrics();
     virtual ~NodeMetrics();
+    const std::vector<double>& getLastUtilities() const { return lastS; }
+    double getLastLinkHoldingTime() const { return lastLht; }
   protected:
     cMessage *tick = nullptr;
     simtime_t period;
@@ -25,6 +32,8 @@ class NodeMetrics : public cSimpleModule
     power::IEpEnergyStorage *bat = nullptr;
 
     simsignal_t stateSignal;
+    std::vector<double> lastS;
+    double lastLht = 0.0;
 
   protected:
     virtual void initialize() override;
