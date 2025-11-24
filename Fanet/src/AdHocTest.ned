@@ -11,10 +11,10 @@ import inet.visualizer.contract.IIntegratedVisualizer;
 network AodvRealAdhoc5
 {
     parameters:
-        @display("bgb=1000,1000");
+        @display("bgb=1250,1250");
 
         @figure[rcvdPkText](type=indicatorText; pos=380,20; anchor=w; font=,18; textFormat="packets received: %g"; initialValue=0);
-        @statistic[packetReceived](source=host[4].app[0].packetReceived; record=figure(count); targetFigure=rcvdPkText);
+        @statistic[packetReceived](source=host[24].app[0].packetReceived; record=figure(count); targetFigure=rcvdPkText);
     submodules:
         visualizer: <default(firstAvailableOrEmpty("IntegratedCanvasVisualizer"))> like IIntegratedVisualizer if typename != "" {
             @display("p=900,900");
@@ -25,12 +25,13 @@ network AodvRealAdhoc5
         radioMedium: <default("UnitDiskRadioMedium")> like IRadioMedium {
             @display("p=900,700");
         }
-        host[5]: <default("WirelessHostWithMetrics")> like INetworkNode {
+        host[25]: <default("WirelessHostWithMetrics")> like INetworkNode {
              parameters:
                 @display("i=device/cellphone");
                 mobility.initFromDisplayString = false;
-                mobility.initialY = (index == 0) ? 500m : 100m;
-                mobility.initialX = 100m + 150m * index;
+                //mobility.initialY = (index == 0) ? 500m : 100m;
+                mobility.initialY = 100m + 100m * (index/5);
+                mobility.initialX = 100m + 100m * (index%5);
 
         }
 }

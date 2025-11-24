@@ -142,8 +142,9 @@ double RlAgent::computeReward(double Rc, double Ec, double Cf) const
 
 double RlAgent::getClusterUtility() const
 {
+    return rand() % 101;
     if (!metrics)
-        return 0.0;
+        return rand() % 101;
 
     const auto& s = metrics->getLastUtilities();
     const auto& w = actions[currentAction];

@@ -31,10 +31,11 @@ PROJECTRELATIVE_PATH =
 O = $(PROJECT_OUTPUT_DIR)/$(CONFIGNAME)/$(PROJECTRELATIVE_PATH)
 
 # Object files for local .cc, .msg and .sm files
-OBJS = $O/src/cluster/ClusterManager.o $O/src/cluster/ClusterMsg.o $O/src/energy/EnergyController.o $O/src/metrics/NodeMetrics.o $O/src/rl/RlAgent.o
+OBJS = $O/src/cluster/ClusterApp.o $O/src/energy/EnergyController.o $O/src/metrics/NodeMetrics.o $O/src/rl/RlAgent.o $O/src/cluster/ClusterHeader_m.o
 
 # Message files
-MSGFILES =
+MSGFILES = \
+    src/cluster/ClusterHeader.msg
 
 # SM files
 SMFILES =

@@ -1,6 +1,8 @@
 package src.metrics;
 import src.energy.EnergyController;
 import src.rl.RlAgent;
+import src.cluster.ClusterManager;
+import inet.networklayer;
 simple NodeMetrics
 {
     parameters:
