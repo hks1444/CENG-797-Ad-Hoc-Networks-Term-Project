@@ -41,6 +41,7 @@ void ClusterApp::becomeClusterHead()
     trials = 0;
     role = ROLE_CH;
     currentClusterHeadId = myId;
+    becoming_ch_time = simTime();
     pseudo_broadcast(DECLARATION, -1, myId, subjectUtility(), subjectHldTime());
 }
 
@@ -129,8 +130,21 @@ void ClusterApp::handleMessageWhenUp(cMessage *msg)
 
         case CF_TIMER:
             logCluster("TIMER_CF", 0);
-            if (role == ROLE_FREE && currentClusterHeadId < 0)
-                runClusterFormation();
+
+            if (!isCfInProgress()) {
+                bool needCf =
+                    (role == ROLE_FREE  && currentClusterHeadId < 0) ||
+                    (role == ROLE_MEMBER && neighbors.count(currentClusterHeadId) &&
+                     simTime() - neighbors[currentClusterHeadId].lastHeard > TIMEOUT_VALUE) ||
+                    (role == ROLE_CH && findBestClusterHead() != nullptr && simTime() - becoming_ch_time > CH_GRACE_PERIOD);
+                if (needCf)
+                    if((role == ROLE_MEMBER && neighbors.count(currentClusterHeadId) &&
+                     simTime() - neighbors[currentClusterHeadId].lastHeard > TIMEOUT_VALUE)){
+                        neighbors[currentClusterHeadId].isClusterHead = false;
+                    }
+                    runClusterFormation();
+            }
+
             scheduleAt(simTime() + cfInterval, msg);
             break;
 
@@ -217,6 +231,11 @@ ClusterApp::NeighborInfo* ClusterApp::findBestClusterHead()
     return best;
 }
 
+bool ClusterApp::isCfInProgress() const
+{
+    return pendingCandidateId >= 0 || requestTimeoutMsg->isScheduled();
+}
+
 void ClusterApp::removeCandidate(int id)
 {
     auto it = neighbors.find(id);
@@ -226,6 +245,8 @@ void ClusterApp::removeCandidate(int id)
 
 void ClusterApp::runClusterFormation()
 {
+    if (isCfInProgress())
+         return;
     trials = 0;
     pendingCandidateId = -1;
 
@@ -290,8 +311,17 @@ void ClusterApp::handleClusterPacket(Packet *pk)
 
     switch (kind) {
     case HELLO:
-        // nothing else; CH detection already done
+    {
+        if (!isCfInProgress() &&
+            n.id == currentClusterHeadId &&
+            !n.isClusterHead) {
+            logCluster("HELLO_CH_LOST", n.id);
+            role = ROLE_FREE;
+            currentClusterHeadId = -1;
+            runClusterFormation();
+        }
         break;
+    }
 
     case CH_REQUEST:
         handleJoinRequest(*hdr);

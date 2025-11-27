@@ -10,6 +10,8 @@
 #include "src/metrics/NodeMetrics.h"
 #include "src/rl/RlAgent.h"
 
+#define CH_GRACE_PERIOD 10
+#define TIMEOUT_VALUE 3
 enum msgTypes{
     HELLO,
     CH_REQUEST,
@@ -42,6 +44,7 @@ class ClusterApp : public ApplicationBase
     Role role = ROLE_FREE;
     int myId  = -1;
     int currentClusterHeadId = -1;
+    simtime_t becoming_ch_time = 0;
 
     struct NeighborInfo {
         int    id = -1;
@@ -87,7 +90,7 @@ class ClusterApp : public ApplicationBase
     void handleClusterJoinAccept(int chId);
     void logCluster(const char *tag, int p1, int p2 = -1, double d1 = 0, double d2 = 0);
     void pseudo_broadcast(int kind, int dstId, int chId, double util, double hld);
-
+    bool isCfInProgress() const;
     NeighborInfo* findBestClusterHead();
     void removeCandidate(int id);
     bool hasCapacity() const { return (int)clusterMembers.size() < maxClusterSize; }
