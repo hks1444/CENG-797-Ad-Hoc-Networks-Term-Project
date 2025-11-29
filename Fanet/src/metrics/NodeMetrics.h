@@ -9,13 +9,41 @@
 #include "inet/power/contract/IEpEnergyStorage.h"
 #include "inet/queueing/contract/IPacketQueue.h"
 #include "inet/networklayer/ipv4/Ipv4RoutingTable.h"
-#define NUM_METRICS 5
+#define NUM_METRICS 6
 
 using namespace inet;
 
 struct WeightVector {
     double w[NUM_METRICS];
 };
+
+// entropy over utilities (non-zero guarded)
+inline double entropy(const std::vector<double>& s)
+{
+    if (s.empty())
+        return 0.0;
+
+    double sum = 0.0;
+    for (double x : s)
+        sum += std::max(0.0, x);
+
+    if (sum <= 0.0)
+        return 0.0;
+
+    double H = 0.0;
+    for (double x : s) {
+        double p = std::max(0.0, x) / sum;
+        if (p > 0.0)
+            H -= p * std::log2(p);
+    }
+
+    if (s.size() < 2)
+        return 0.0;
+
+    double Hmax = std::log2(static_cast<double>(s.size()));
+    return (Hmax > 0.0) ? (H / Hmax) : 0.0;
+}
+
 
 class NodeMetrics : public cSimpleModule
 {
@@ -60,9 +88,6 @@ class NodeMetrics : public cSimpleModule
 
     // s6: placeholder (e.g., link success over window) -> return 0..1, or 0 if unused
     double linkHoldingTime();
-
-    // entropy over utilities (non-zero guarded)
-    double entropy(const std::vector<double>& s);
 };
 
 

@@ -1,11 +1,19 @@
 #include "src/rl/RlAgent.h"
 #include "inet/power/contract/IEpEnergyStorage.h"
+#include <algorithm>
+#include <cmath>
 
 Define_Module(RlAgent);
 
 void RlAgent::initialize()
 {
     updatePeriod = par("updatePeriod");
+    alpha        = par("alpha");
+    gamma        = par("gamma");
+    epsilon      = par("epsilon");
+    numActions   = par("numActions");
+    numStates    = par("numStates");
+
     tick = new cMessage("rlTick");
     scheduleAt(simTime() + updatePeriod, tick);
 
@@ -15,27 +23,57 @@ void RlAgent::initialize()
     metrics = m ? check_and_cast<NodeMetrics*>(m) : nullptr;
 
     initActionSpace();
+    initQTable();
 
-    // initial energy snapshot
-    lastEnergy = residualEnergy();
+    // initial state, action, and energy snapshot
+    currentState  = computeStateIndex();
+    currentAction = 0;               // equal-weights action
+    lastEnergy    = residualEnergy();
+
+    rewardVector.setName("rlReward");
+    actionVector.setName("rlAction");
+    stateVector.setName("rlState");
+    RcVector.setName("Rc");
+    EcVector.setName("Ec");
+    CfVector.setName("Cf");
 }
 
 void RlAgent::initActionSpace()
 {
-    int n = par("numActions");
+    // NOTE: action = <w1..w6>, each wi in [0,1], sum ≈ 1
+    // First action: equal weights as in paper Q[s, <1/6,...>] = 1
     actions.clear();
-    actions.reserve(n);
+    std::vector<double> equalW(NUM_METRICS, 1.0 / NUM_METRICS);
+    actions.push_back(equalW);  // a=0
 
-    // Example: 4 fixed weight sets, all normalized (sum = 1)
-    // You can change these to match the paper’s preferred initial policies.
+    // Some additional fixed policies (examples, can tune):
     actions.push_back({0.4, 0.2, 0.1, 0.1, 0.1, 0.1}); // energy-heavy
     actions.push_back({0.2, 0.4, 0.1, 0.1, 0.1, 0.1}); // centrality-heavy
     actions.push_back({0.2, 0.2, 0.2, 0.2, 0.1, 0.1}); // balanced
-    actions.push_back({0.1, 0.2, 0.2, 0.1, 0.2, 0.2}); // mobility/link heavy
+    actions.push_back({0.1, 0.2, 0.2, 0.1, 0.2, 0.2}); // mobility/link-heavy
 
-    // ensure we have at least numActions definitions
-    while ((int)actions.size() < n)
+    // ensure we have at least numActions actions
+    while ((int)actions.size() < numActions)
         actions.push_back(actions.back());
+
+    // clip to numActions
+    if ((int)actions.size() > numActions)
+        actions.resize(numActions);
+}
+
+
+void RlAgent::initQTable()
+{
+    if (numStates <= 0)  numStates  = 1;
+    if (numActions <= 0) numActions = (int)actions.size();
+
+    Q.assign(numStates,    std::vector<double>(numActions, 0.0));
+    Ravg.assign(numStates, std::vector<double>(numActions, 0.0));
+    Nsa.assign(numStates,  std::vector<int>(numActions,    0));
+
+    // Initialization: Q[s, equalWeightsAction] = 1 for all states
+    for (int s = 0; s < numStates; ++s)
+        Q[s][0] = 1.0;
 }
 
 void RlAgent::handleMessage(cMessage *msg)
@@ -56,113 +94,209 @@ void RlAgent::finish()
     }
 }
 
-double RlAgent::residualEnergy() const
+// --- state encoding -------------------------------------------------
+
+int RlAgent::computeStateIndex() const
 {
-    cModule *node = getContainingNode(this);
-    if (!node) return 0.0;
+    if (!metrics || numStates <= 1)
+        return 0;
 
-    cModule *e = node->getSubmodule("energyStorage");
-    if (!e) return 0.0;
+    const auto& s = metrics->getLastUtilities();
+    if (s.empty())
+        return 0;
 
-    auto bat = dynamic_cast<power::IEpEnergyStorage*>(e);
-    if (!bat) return 0.0;
+    double H = entropy(s);                   // normalized to [0,1]
+    double norm = std::clamp(H, 0.0, 0.999999);
 
-    double cap = bat->getNominalEnergyCapacity().get();
-    double rem = bat->getResidualEnergyCapacity().get();
-    if (cap <= 0) return 0.0;
+    double binWidth = 1.0 / numStates;
 
-    return rem / cap; // [0,1]
+    int idx = (int)(norm / binWidth);
+    if (idx < 0) idx = 0;
+    if (idx >= numStates) idx = numStates - 1;
+
+    return idx;
 }
 
-void RlAgent::onUpdate()
+// --- reward components ----------------------------------------------
+
+double RlAgent::residualEnergy() const
 {
-    // 1) compute reward components over last window
-    double Rc = computeRc();
-    double Ec = computeEc();
-    double Cf = computeCf();
+    if (!metrics || actions.empty())
+       return 0.0;
 
-    // 2) compute reward using paper formula
-    double reward = computeReward(Rc, Ec, Cf);
-    recordScalar("RlReward", reward);
+    const auto& s = metrics->getLastUtilities();
 
-    // 3) update policy / choose next action (placeholder)
-    updatePolicy(reward);
-
-    // 4) reset window counters
-    roleChangesInWindow = 0;
-    confirmationsInWindow = 0;
+    return s[0]; // [0,1]
 }
 
 double RlAgent::computeRc() const
 {
-    // paper:
-    // Rc = 1  if number of node changing its role with frequency < ∞   (practically: stable)
-    // Rc = -1 otherwise
-    // Here: if roleChangesInWindow == 0 -> stable
+    // Rc = 1 if no role change during last window, otherwise -1
     return (roleChangesInWindow == 0) ? 1.0 : -1.0;
 }
 
 double RlAgent::computeEc() const
 {
-    // Ec: decline in energy over last T
     double nowE = const_cast<RlAgent*>(this)->residualEnergy();
-    double delta = nowE - lastEnergy; // negative means energy dropped
-    // Map energy drop to [0,1], 1 = no drop, 0 = large drop
-    double drop = std::clamp(-delta, 0.0, 1.0);
-    return 1.0 - drop;
+    double delta = nowE - lastEnergy;   // negative => energy drop
+
+    double drop = std::clamp(-delta, 0.0, 1.0);  // [0,1]
+    return 1.0 - drop;                           // 1: no drop, 0: large drop
 }
 
 double RlAgent::computeCf() const
 {
-    // Cf = 1 if confirmations > 0 else 0
+    // Cf = 1 if any confirmations arrived, else 0
     return (confirmationsInWindow > 0) ? 1.0 : 0.0;
 }
 
 double RlAgent::computeReward(double Rc, double Ec, double Cf) const
 {
+    // r = w1 * Rc + w2 * Ec + w3 * Cf
     const auto& w = actions[currentAction];
 
-    // r = w1 * Rc + w2 * Ec + w3 * Cf
-    double r = w[0] * Rc + w[1] * Ec + w[2] * Cf;
+    double r = 0.0;
+    if (!w.empty()) {
+        double w1 = w.size() > 0 ? w[0] : 0.0;
+        double w2 = w.size() > 1 ? w[1] : 0.0;
+        double w3 = w.size() > 2 ? w[2] : 0.0;
+        r = w1 * Rc + w2 * Ec + w3 * Cf;
+    }
 
     // RPN = (1 − e^{−3r}) / (1 + e^{3r})
     double num = 1.0 - std::exp(-3.0 * r);
     double den = 1.0 + std::exp( 3.0 * r);
     if (den == 0.0) return 0.0;
 
-    double RPN = num / den;
+    double RPN = r; //num / den;
 
-    // Reward per paper: Reward = RPN / #(nodes.)
-    // Per-node module cannot easily divide by global node count here,
-    // so you can either:
-    //  - just use RPN as “local reward”
-    //  - or provide nodeCount as a global parameter.
+    // Local version: use RPN as per-node reward
     return RPN;
 }
 
+// --- Q-learning core ------------------------------------------------
+
+int RlAgent::selectActionEpsGreedy(int state)
+{
+    if (numActions <= 0)
+        return 0;
+
+    double u = uniform(0, 1);
+    if (u < epsilon) {
+        // exploration
+        return intrand(numActions);
+    }
+
+    // exploitation: argmax_a Q[state][a]
+    int bestA = 0;
+    double bestQ = Q[state][0];
+    for (int a = 1; a < numActions; ++a) {
+        if (Q[state][a] > bestQ) {
+            bestQ = Q[state][a];
+            bestA = a;
+        }
+    }
+    return bestA;
+}
+
+void RlAgent::bellmanUpdate(int s, int a, int sNext, double reward)
+{
+    if (s < 0 || s >= numStates)  return;
+    if (a < 0 || a >= numActions) return;
+    if (sNext < 0 || sNext >= numStates) sNext = s;
+
+    // Maintain running average R[s,a]
+    Nsa[s][a] += 1;
+    double n = (double)Nsa[s][a];
+    double oldR = Ravg[s][a];
+    double newR = oldR + (reward - oldR) / n;
+    Ravg[s][a] = newR;
+
+    // Bellman: Q[s,a] <- (1-α)Q[s,a] + α*( newR + γ max_a' Q[sNext,a'] )
+    double maxNext = *std::max_element(Q[sNext].begin(), Q[sNext].end());
+    double target  = newR + gamma * maxNext;
+    Q[s][a]        = (1.0 - alpha) * Q[s][a] + alpha * target;
+}
+
+void RlAgent::onUpdate()
+{
+    // encode next state from current utilities
+    int nextState = computeStateIndex();
+
+    // reward over last period T
+    double Rc = computeRc();
+    double Ec = computeEc();
+    double Cf = computeCf();
+
+    RcVector.record(Rc);
+    EcVector.record(Ec);
+    CfVector.record(Cf);
+
+    double reward = computeReward(Rc, Ec, Cf);
+
+    // scalar + vector log
+    recordScalar("RlReward", reward);
+    rewardVector.record(reward);
+    stateVector.record(currentState);   // log state *before* transition
+    actionVector.record(currentAction); // log action used in this window
+
+
+    // local Q-learning update for (currentState, currentAction) -> nextState
+    bellmanUpdate(currentState, currentAction, nextState, reward);
+
+    int oldAction = currentAction;
+    // select next action for next period
+    currentState  = nextState;
+    currentAction = selectActionEpsGreedy(currentState);
+
+    // optional: log action-change events in text
+    if (oldAction != currentAction) {
+        std::cout << "RL node=" << getContainingNode(this)->getFullPath()
+                << " t=" << simTime()
+                << " state=" << currentState
+                << " actionChange " << oldAction << " -> " << currentAction
+                << " reward=" << reward << std::endl;
+    }
+
+    // reset sliding window counters
+    lastEnergy = residualEnergy();
+    roleChangesInWindow   = 0;
+    confirmationsInWindow = 0;
+}
+
+// --- interaction with ClusterApp -----------------------------------
+
 double RlAgent::getClusterUtility() const
 {
-    return rand() % 101;
-    if (!metrics)
-        return rand() % 101;
+    if (!metrics || actions.empty())
+        return 0.0;
 
     const auto& s = metrics->getLastUtilities();
     const auto& w = actions[currentAction];
 
+    int L = std::min((int)s.size(), (int)w.size());
     double score = 0.0;
-    for (int i = 0; i < 6 && i < (int)s.size(); ++i)
+    for (int i = 0; i < L; ++i)
         score += w[i] * s[i];
 
     return score;
 }
 
-void RlAgent::updatePolicy(double reward)
+void RlAgent::notifyRoleChange(int newRole)
 {
-    // Placeholder: greedy over fixed action set based on current reward.
-    // For now, just keep the same action; implement Q-learning later.
-    // Example of very simple explore-exploit could be added here.
+    if (newRole != currentRole) {
+        currentRole = newRole;
+        roleChangesInWindow++;
+    }
+}
 
-    // Example stub:
-    // recordScalar("currentAction", currentAction);
-    (void)reward;
+void RlAgent::notifyClusterConfirmation()
+{
+    /*
+     *  Cf, which represents the number of confir-
+mation messages received after delivering the packet through
+the corresponding node.
+        Currently app acks are not considered.
+     * */
+    confirmationsInWindow++;
 }

@@ -45,7 +45,7 @@ void NodeMetrics::sample()
     s.push_back(degreeCentrality());
     s.push_back(velocitySimilarity());
     s.push_back(queueFill());
-    //s.push_back(routingCloseness());
+    s.push_back(routingCloseness());
     double lht = linkHoldingTime();
     s.push_back(lht);
 
@@ -270,23 +270,6 @@ double NodeMetrics::linkHoldingTime()
             return 0.0;
 
         return acc / cnt;
-}
-
-// --- entropy over utilities ---
-double NodeMetrics::entropy(const std::vector<double>& s)
-{
-    double sum = 0.0;
-    for (double x : s) sum += std::max(0.0, x);
-
-    if (sum <= 0) return 0.0;
-    double H = 0.0;
-    for (double x : s) {
-        double p = std::max(0.0, x) / sum;
-        if (p > 0) H -= p * std::log2(p);
-    }
-    // Normalize by log2(|s|) to bound to [0,1]
-    double Hmax = std::log2((double)s.size());
-    return H;
 }
 
 NodeMetrics::NodeMetrics() {

@@ -30,8 +30,8 @@ network AodvRealAdhoc5
                 @display("i=device/cellphone");
                 mobility.initFromDisplayString = false;
                 //mobility.initialY = (index == 0) ? 500m : 100m;
-                mobility.initialY = 100m + 100m * (index/5);
-                mobility.initialX = 100m + 100m * (index%5);
+//                mobility.initialY = 100m + 100m * (index/5);
+//                mobility.initialX = 100m + 100m * (index%5);
 
         }
 }

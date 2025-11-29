@@ -79,6 +79,7 @@ class ClusterApp : public ApplicationBase
     virtual void handleCrashOperation(LifecycleOperation *operation) override {}
 
     // CF/CHRS helpers
+    void handleRoleChange(Role new_role);
     void sendHello();
     void runClusterFormation();
     void handleClusterPacket(Packet *pk);

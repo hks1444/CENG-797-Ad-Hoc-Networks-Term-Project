@@ -33,13 +33,18 @@ double ClusterApp::subjectHldTime() const
     return metrics ? metrics->getLastLinkHoldingTime() : 2;
 }
 
+void ClusterApp::handleRoleChange(Role new_role){
+    if (rl) rl->notifyRoleChange(new_role % 2); // treat cluster member and free as the same
+    role = new_role;
+}
+
 // ---------- role transitions ----------
 
 void ClusterApp::becomeClusterHead()
 {
     logCluster("BECOME_CH", myId, -1, subjectUtility(), subjectHldTime());
     trials = 0;
-    role = ROLE_CH;
+    handleRoleChange(ROLE_CH);
     currentClusterHeadId = myId;
     becoming_ch_time = simTime();
     pseudo_broadcast(DECLARATION, -1, myId, subjectUtility(), subjectHldTime());
@@ -57,8 +62,8 @@ void ClusterApp::handleClusterJoinReject()
 void ClusterApp::handleClusterJoinAccept(int chId)
 {
     logCluster("JOIN_ACCEPT_LOCAL", chId);
-
-    role = ROLE_MEMBER;
+    if (rl) rl->notifyClusterConfirmation();
+    handleRoleChange(ROLE_MEMBER);
     currentClusterHeadId = chId;
     pendingCandidateId = -1;
 }
@@ -316,7 +321,7 @@ void ClusterApp::handleClusterPacket(Packet *pk)
             n.id == currentClusterHeadId &&
             !n.isClusterHead) {
             logCluster("HELLO_CH_LOST", n.id);
-            role = ROLE_FREE;
+            handleRoleChange(ROLE_FREE);
             currentClusterHeadId = -1;
             runClusterFormation();
         }
