@@ -34,7 +34,7 @@ double ClusterApp::subjectHldTime() const
 }
 
 void ClusterApp::handleRoleChange(Role new_role){
-    if (rl) rl->notifyRoleChange(new_role % 2); // treat cluster member and free as the same
+    if (rl) rl->notifyRoleChange(new_role);
     role = new_role;
 }
 
@@ -324,6 +324,9 @@ void ClusterApp::handleClusterPacket(Packet *pk)
             handleRoleChange(ROLE_FREE);
             currentClusterHeadId = -1;
             runClusterFormation();
+        }else if(n.id == currentClusterHeadId &
+                n.isClusterHead && rl){
+                rl->reportCHLastHeard();
         }
         break;
     }
@@ -417,6 +420,7 @@ void ClusterApp::handleJoinRequest(const ClusterHeader& hdr)
     // accept
     clusterMembers.insert(requesterId);
     logCluster("CH_ACCEPT", myId, requesterId, subjectUtility(), reqHld);
+    rl->reportCHLastHeard();
     pseudo_broadcast(CH_RESPONSE, requesterId, myId, subjectUtility(), subjectHldTime());
 
     // RL hook could go here

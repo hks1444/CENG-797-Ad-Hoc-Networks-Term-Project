@@ -20,6 +20,7 @@ void RlAgent::initialize()
     // locate NodeMetrics on same node
     cModule *node = getContainingNode(this);
     cModule *m = node->getSubmodule("metrics");
+
     metrics = m ? check_and_cast<NodeMetrics*>(m) : nullptr;
 
     initActionSpace();
@@ -49,7 +50,6 @@ void RlAgent::initActionSpace()
     // Some additional fixed policies (examples, can tune):
     actions.push_back({0.4, 0.2, 0.1, 0.1, 0.1, 0.1}); // energy-heavy
     actions.push_back({0.2, 0.4, 0.1, 0.1, 0.1, 0.1}); // centrality-heavy
-    actions.push_back({0.2, 0.2, 0.2, 0.2, 0.1, 0.1}); // balanced
     actions.push_back({0.1, 0.2, 0.2, 0.1, 0.2, 0.2}); // mobility/link-heavy
 
     // ensure we have at least numActions actions
@@ -72,8 +72,10 @@ void RlAgent::initQTable()
     Nsa.assign(numStates,  std::vector<int>(numActions,    0));
 
     // Initialization: Q[s, equalWeightsAction] = 1 for all states
-    for (int s = 0; s < numStates; ++s)
-        Q[s][0] = 1.0;
+    for (int a = 0; a < numActions; a++){
+        for (int s = 0; s < numStates; ++s)
+            Q[s][a] = 1.0;
+    }
 }
 
 void RlAgent::handleMessage(cMessage *msg)
@@ -132,22 +134,36 @@ double RlAgent::residualEnergy() const
 double RlAgent::computeRc() const
 {
     // Rc = 1 if no role change during last window, otherwise -1
-    return (roleChangesInWindow == 0) ? 1.0 : -1.0;
+    return (roleChangesInWindow < 2) ? 1.0 : -1.0;
 }
 
-double RlAgent::computeEc() const
+double RlAgent::computeEc()
 {
     double nowE = const_cast<RlAgent*>(this)->residualEnergy();
-    double delta = nowE - lastEnergy;   // negative => energy drop
-
-    double drop = std::clamp(-delta, 0.0, 1.0);  // [0,1]
+    double delta = lastEnergy - nowE;
+    if(delta > max_energy_drop){
+        max_energy_drop = delta;
+        delta = 1;
+    }else{
+        delta = delta/max_energy_drop;
+    }
+    double drop = std::clamp(delta, 0.0, 1.0);  // [0,1]
     return 1.0 - drop;                           // 1: no drop, 0: large drop
+}
+
+void RlAgent::reportCHLastHeard(){
+    CHLastHeard = simTime();
 }
 
 double RlAgent::computeCf() const
 {
-    // Cf = 1 if any confirmations arrived, else 0
-    return (confirmationsInWindow > 0) ? 1.0 : 0.0;
+    if(currentRole == ROLE_CH){
+        return (confirmationsInWindow > 0) ? 1 : -1;
+    }else if(currentRole == ROLE_MEMBER){
+        return (simTime() - CHLastHeard - 1 > TIMEOUT_VALUE) ? 1 : -1;
+    }else{
+        return -1;
+    }
 }
 
 double RlAgent::computeReward(double Rc, double Ec, double Cf) const
@@ -160,7 +176,10 @@ double RlAgent::computeReward(double Rc, double Ec, double Cf) const
         double w1 = w.size() > 0 ? w[0] : 0.0;
         double w2 = w.size() > 1 ? w[1] : 0.0;
         double w3 = w.size() > 2 ? w[2] : 0.0;
-        r = w1 * Rc + w2 * Ec + w3 * Cf;
+        double w4 = w.size() > 3 ? w[3] : 0.0;
+        double w5 = w.size() > 4 ? w[4] : 0.0;
+        double w6 = w.size() > 5 ? w[5] : 0.0;
+        r = (w1+w4) * Rc + (w2+w5) * Ec + (w3+w6) * Cf;
     }
 
     // RPN = (1 − e^{−3r}) / (1 + e^{3r})
@@ -260,8 +279,11 @@ void RlAgent::onUpdate()
 
     // reset sliding window counters
     lastEnergy = residualEnergy();
-    roleChangesInWindow   = 0;
+    if(CHWindow == 0){
+        roleChangesInWindow   = 0;
+    }
     confirmationsInWindow = 0;
+    CHWindow = (CHWindow + 1) % 10;
 }
 
 // --- interaction with ClusterApp -----------------------------------

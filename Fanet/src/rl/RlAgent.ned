@@ -4,7 +4,7 @@ simple RlAgent
 {
     parameters:
         double updatePeriod @unit(s) = default(1s);
-        int    numActions            = default(5);
+        int    numActions            = default(4);
         int    numStates             = default(5);   // number of entropy bins
         double alpha                 = default(0.001); // learning rate
         double gamma                 = default(0.9); // discount

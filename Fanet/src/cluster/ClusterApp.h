@@ -9,9 +9,9 @@
 #include "src/cluster/ClusterHeader_m.h"
 #include "src/metrics/NodeMetrics.h"
 #include "src/rl/RlAgent.h"
+#include "src/cluster/roles.h"
+#define CH_GRACE_PERIOD 5
 
-#define CH_GRACE_PERIOD 10
-#define TIMEOUT_VALUE 3
 enum msgTypes{
     HELLO,
     CH_REQUEST,
@@ -40,7 +40,7 @@ class ClusterApp : public ApplicationBase
     cMessage *requestTimeoutMsg = nullptr;
 
     // roles / cluster state
-    enum Role { ROLE_FREE = 0, ROLE_CH = 1, ROLE_MEMBER = 2 };
+
     Role role = ROLE_FREE;
     int myId  = -1;
     int currentClusterHeadId = -1;

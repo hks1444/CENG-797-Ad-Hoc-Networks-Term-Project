@@ -3,6 +3,7 @@
 
 #include "inet/common/INETDefs.h"
 #include "src/metrics/NodeMetrics.h"
+#include "src/cluster/roles.h"
 #include <vector>
 
 using namespace inet;
@@ -13,13 +14,14 @@ class RlAgent : public cSimpleModule
     // timing
     cMessage *tick = nullptr;
     simtime_t updatePeriod;
-
+    simtime_t CHLastHeard;
     // links to metrics
     NodeMetrics *metrics = nullptr;
-
+    double max_energy_drop;
     // discrete state/action spaces
     int numStates = 1;
     int numActions = 0;
+    int CHWindow = 0;
 
     // Q-learning hyperparameters
     double alpha   = 0.1;   // learning rate
@@ -66,7 +68,7 @@ class RlAgent : public cSimpleModule
 
     // reward components and reward
     double computeRc() const;
-    double computeEc() const;
+    double computeEc();
     double computeCf() const;
     double computeReward(double Rc, double Ec, double Cf) const;
 
@@ -84,7 +86,7 @@ class RlAgent : public cSimpleModule
     // hooks from ClusterApp (local node only)
     void notifyRoleChange(int newRole);         // increments Rc counter
     void notifyClusterConfirmation();           // increments Cf counter
-
+    void reportCHLastHeard();
     // optional: expose Q-table for logging/inspection
     const std::vector<std::vector<double>>& getQTable() const { return Q; }
 };
