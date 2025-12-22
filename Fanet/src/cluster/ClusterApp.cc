@@ -3,6 +3,90 @@
 Define_Module(ClusterApp);
 
 // ---------- logging helper ----------
+using namespace inet;
+
+static cModule *findSubmoduleOrNull(cModule *m, const char *name)
+{
+    return m ? m->getSubmodule(name) : nullptr;
+}
+
+static cModule *findIpv4Module(cModule *host)
+{
+    // Layout A: StandardHost/AdhocHost: host.networkLayer.ipv4
+    if (auto *nl = findSubmoduleOrNull(host, "networkLayer")) {
+        if (auto *ipv4 = findSubmoduleOrNull(nl, "ipv4"))
+            return ipv4;
+    }
+
+    // Layout B: AodvRouter: host.ipv4
+    if (auto *ipv4 = findSubmoduleOrNull(host, "ipv4"))
+        return ipv4;
+
+    return nullptr;
+}
+
+static Ipv4RoutingTable *getRt(cModule *host)
+{
+    auto *ipv4 = findIpv4Module(host);
+    if (!ipv4)
+        throw cRuntimeError("ipv4 module not found on %s", host->getFullPath().c_str());
+
+    auto *rtm = ipv4->getSubmodule("routingTable");
+    if (!rtm)
+        throw cRuntimeError("routingTable not found under %s", ipv4->getFullPath().c_str());
+
+    return check_and_cast<Ipv4RoutingTable*>(rtm);
+}
+
+static IInterfaceTable *getIft(cModule *host)
+{
+    // Layout A: host.interfaceTable
+    if (auto *m = findSubmoduleOrNull(host, "interfaceTable"))
+        return check_and_cast<IInterfaceTable*>(m);
+
+    // Layout A-alt: host.networkLayer.interfaceTable
+    if (auto *nl = findSubmoduleOrNull(host, "networkLayer")) {
+        if (auto *m = findSubmoduleOrNull(nl, "interfaceTable"))
+            return check_and_cast<IInterfaceTable*>(m);
+    }
+
+    throw cRuntimeError("interfaceTable not found on %s", host->getFullPath().c_str());
+}
+
+static void clearDefaultGateway(cModule *host)
+{
+    auto *rt = getRt(host);
+    for (int i = rt->getNumRoutes() - 1; i >= 0; --i) {
+        Ipv4Route *r = rt->getRoute(i);
+        if (r->getDestination().isUnspecified() && r->getNetmask().isUnspecified())
+            rt->deleteRoute(r);
+    }
+}
+
+static void setDefaultGateway(int currentClusterHeadId, cModule *host, const Ipv4Address& gw, const char *ifname)
+{
+    auto *rt  = getRt(host);
+    auto *ift = getIft(host);
+
+    NetworkInterface *ie = ift->findInterfaceByName(ifname);
+    if (!ie)
+        throw cRuntimeError("Interface %s not found on %s", ifname, host->getFullPath().c_str());
+
+    clearDefaultGateway(host);
+    auto *r = new Ipv4Route();
+    r->setDestination(Ipv4Address::UNSPECIFIED_ADDRESS);
+    r->setNetmask(Ipv4Address::UNSPECIFIED_ADDRESS);
+    r->setGateway(gw);
+    r->setInterface(ie);
+    r->setSourceType(Ipv4Route::MANUAL);
+    rt->addRoute(r);
+}
+
+static Ipv4Address idToIp(int nodeId)
+{
+    // with address='10.0.0.x': host[i] -> 10.0.0.(i+1)
+    return Ipv4Address(10, 0, 0, nodeId + 1);
+}
 
 void ClusterApp::logCluster(const char *tag, int p1, int p2, double d1, double d2)
 {
@@ -30,7 +114,7 @@ double ClusterApp::subjectUtility() const
 
 double ClusterApp::subjectHldTime() const
 {
-    return metrics ? metrics->getLastLinkHoldingTime() : 2;
+    return metrics ? metrics->getLastLinkHoldingTime() : 0;
 }
 
 void ClusterApp::handleRoleChange(Role new_role){
@@ -42,6 +126,7 @@ void ClusterApp::handleRoleChange(Role new_role){
 
 void ClusterApp::becomeClusterHead()
 {
+    setDefaultGateway(currentClusterHeadId, getContainingNode(this), idToIp(myId), "wlan0");
     logCluster("BECOME_CH", myId, -1, subjectUtility(), subjectHldTime());
     trials = 0;
     handleRoleChange(ROLE_CH);
@@ -61,6 +146,7 @@ void ClusterApp::handleClusterJoinReject()
 
 void ClusterApp::handleClusterJoinAccept(int chId)
 {
+    setDefaultGateway(chId, getContainingNode(this), idToIp(chId), "wlan0");
     logCluster("JOIN_ACCEPT_LOCAL", chId);
     if (rl) rl->notifyClusterConfirmation();
     handleRoleChange(ROLE_MEMBER);
@@ -146,6 +232,8 @@ void ClusterApp::handleMessageWhenUp(cMessage *msg)
                     if((role == ROLE_MEMBER && neighbors.count(currentClusterHeadId) &&
                      simTime() - neighbors[currentClusterHeadId].lastHeard > TIMEOUT_VALUE)){
                         neighbors[currentClusterHeadId].isClusterHead = false;
+                        handleRoleChange(ROLE_FREE);
+                        currentClusterHeadId = -1;
                     }
                     runClusterFormation();
             }
@@ -265,7 +353,7 @@ void ClusterApp::runClusterFormation()
         double subjU = subjectUtility();
         logCluster("CF_TRY", myId, cand->id, cand->utility, cand->hldTime);
 
-        if (cand->utility > subjU /*&& cand->hldTime > hldTimeThreshold*/) {
+        if (cand->utility > subjU){ //&& cand->hldTime > hldTimeThreshold) {
             // send CH_REQUEST to that node (unicast at app-level via dstId)
             pendingCandidateId = cand->id;
             pseudo_broadcast(CH_REQUEST, cand->id, cand->id, subjU, subjectHldTime());
@@ -283,6 +371,14 @@ void ClusterApp::runClusterFormation()
         logCluster("CF_BECOME_CH", myId);
         becomeClusterHead();
     }
+}
+
+Role ClusterApp::getRole(){
+    return role;
+}
+
+int ClusterApp::getCurrentClusterHeadId(){
+    return currentClusterHeadId;
 }
 
 // ---------- inbound packet handling ----------
@@ -321,10 +417,11 @@ void ClusterApp::handleClusterPacket(Packet *pk)
             n.id == currentClusterHeadId &&
             !n.isClusterHead) {
             logCluster("HELLO_CH_LOST", n.id);
+            clearDefaultGateway(getContainingNode(this));
             handleRoleChange(ROLE_FREE);
             currentClusterHeadId = -1;
             runClusterFormation();
-        }else if(n.id == currentClusterHeadId &
+        }else if(n.id == currentClusterHeadId &&
                 n.isClusterHead && rl){
                 rl->reportCHLastHeard();
         }

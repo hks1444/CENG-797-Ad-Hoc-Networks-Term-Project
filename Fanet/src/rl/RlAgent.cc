@@ -269,13 +269,13 @@ void RlAgent::onUpdate()
     currentAction = selectActionEpsGreedy(currentState);
 
     // optional: log action-change events in text
-    if (oldAction != currentAction) {
-        std::cout << "RL node=" << getContainingNode(this)->getFullPath()
-                << " t=" << simTime()
-                << " state=" << currentState
-                << " actionChange " << oldAction << " -> " << currentAction
-                << " reward=" << reward << std::endl;
-    }
+//    if (oldAction != currentAction) {
+//        std::cout << "RL node=" << getContainingNode(this)->getFullPath()
+//                << " t=" << simTime()
+//                << " state=" << currentState
+//                << " actionChange " << oldAction << " -> " << currentAction
+//                << " reward=" << reward << std::endl;
+//    }
 
     // reset sliding window counters
     lastEnergy = residualEnergy();

@@ -1,8 +1,8 @@
 package src.metrics;
 import src.energy.EnergyController;
 import src.rl.RlAgent;
-import src.cluster.ClusterManager;
-import inet.networklayer;
+import src.cluster.ClusterApp;
+import src.tcp.ClusterTcpApp;
 simple NodeMetrics
 {
     parameters:
@@ -11,7 +11,7 @@ simple NodeMetrics
         @display("i=block/cog");
 }
 
-module AodvRouterWithMetrics extends inet.node.aodv.AodvRouter
+module RouterWithMetrics extends inet.node.aodv.AodvRouter
 {
     submodules:
         metrics: NodeMetrics {

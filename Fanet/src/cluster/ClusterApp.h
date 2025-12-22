@@ -4,12 +4,16 @@
 #include "inet/applications/base/ApplicationBase.h"
 #include "inet/transportlayer/contract/udp/UdpSocket.h"
 #include "inet/networklayer/common/L3AddressResolver.h"
+#include "inet/networklayer/ipv4/Ipv4RoutingTable.h"
+#include "inet/networklayer/contract/IInterfaceTable.h"
 #include "inet/common/geometry/common/Coord.h"
 #include "inet/mobility/contract/IMobility.h"
 #include "src/cluster/ClusterHeader_m.h"
 #include "src/metrics/NodeMetrics.h"
 #include "src/rl/RlAgent.h"
 #include "src/cluster/roles.h"
+#include "inet/common/ModuleAccess.h"
+
 #define CH_GRACE_PERIOD 5
 
 enum msgTypes{
@@ -66,10 +70,10 @@ class ClusterApp : public ApplicationBase
     simtime_t helloInterval;
     simtime_t cfInterval;
     simtime_t requestTimeout;
+    Ipv4Address lastGw;
 
     enum SelfKinds { HELLO_TIMER = 1, CF_TIMER = 2, REQ_TIMEOUT = 3 };
 
-  protected:
     // ApplicationBase overrides
     virtual void initialize(int stage) override;
     virtual void handleMessageWhenUp(cMessage *msg) override;
@@ -106,6 +110,8 @@ class ClusterApp : public ApplicationBase
     void sendClusterMsg(int kind, int dstId, int chId, double util, double hld, L3Address dest);
 
   public:
+    int getCurrentClusterHeadId();
+    Role getRole();
     ClusterApp() {}
 };
 
