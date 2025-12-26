@@ -13,7 +13,7 @@ How to Run:
         python3 agg_metrics.py all_metrics.csv --time-ms --delay-ms --n-runs 5
 Metrics:
   - delay: from vector name e2eDelayPeriodicSec
-  - availability: derived from delay validity (1 if delay is finite at time t, else 0)
+  - availability: Availability = fraction of hosts that are end-to-end reachable and functional at time t, inferred solely from delay existence.
   - rlReward: from vector name rlReward
 
 Workflow:
