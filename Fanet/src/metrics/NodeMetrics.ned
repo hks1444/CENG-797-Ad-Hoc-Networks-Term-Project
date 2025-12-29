@@ -2,7 +2,6 @@ package src.metrics;
 import src.energy.EnergyController;
 import src.rl.RlAgent;
 import src.cluster.ClusterApp;
-import src.tcp.ClusterTcpApp;
 simple NodeMetrics
 {
     parameters:
@@ -12,6 +11,8 @@ simple NodeMetrics
 }
 
 module RouterWithMetrics extends inet.node.aodv.AodvRouter
+//module RouterWithMetrics extends inet.node.dsdv.DsdvRouter
+//module RouterWithMetrics extends inet.node.gpsr.GpsrRouter
 {
     submodules:
         metrics: NodeMetrics {

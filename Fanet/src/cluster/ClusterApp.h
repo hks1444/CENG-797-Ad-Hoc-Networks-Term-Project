@@ -42,13 +42,17 @@ class ClusterApp : public ApplicationBase
     cMessage *helloTimer = nullptr;
     cMessage *cfTimer    = nullptr;
     cMessage *requestTimeoutMsg = nullptr;
+    cMessage *statsTimer = nullptr;
 
-    // roles / cluster state
+    cOutVector v_globalNumCH;
+    cOutVector v_totalMsgSent;
+    long totalMsgSent = 0;
 
     Role role = ROLE_FREE;
     int myId  = -1;
     int currentClusterHeadId = -1;
     simtime_t becoming_ch_time = 0;
+    double statsInterval;
 
     struct NeighborInfo {
         int    id = -1;
@@ -72,7 +76,7 @@ class ClusterApp : public ApplicationBase
     simtime_t requestTimeout;
     Ipv4Address lastGw;
 
-    enum SelfKinds { HELLO_TIMER = 1, CF_TIMER = 2, REQ_TIMEOUT = 3 };
+    enum SelfKinds { HELLO_TIMER = 1, CF_TIMER = 2, REQ_TIMEOUT = 3, STATS_TIMER=4 };
 
     // ApplicationBase overrides
     virtual void initialize(int stage) override;
@@ -109,6 +113,7 @@ class ClusterApp : public ApplicationBase
     // message send helpers
     void sendClusterMsg(int kind, int dstId, int chId, double util, double hld, L3Address dest);
 
+    int globalCountClusterHeads() const;
   public:
     int getCurrentClusterHeadId();
     Role getRole();

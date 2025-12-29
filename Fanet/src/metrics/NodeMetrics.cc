@@ -75,14 +75,15 @@ double NodeMetrics::residualEnergy()
 
 static double readCommRange(cModule *node)
 {
-    cModule *wlan0 = node->getSubmodule("wlan", 0);
-    if (!wlan0) return 0.0;
-    cModule *radio = wlan0->getSubmodule("radio");
-    if (!radio) return 0.0;
-    cModule *tx = radio->getSubmodule("transmitter");
-    if (!tx) return 0.0;
-    cPar& p = tx->par("communicationRange");
-    return p.doubleValue();
+//    cModule *wlan0 = node->getSubmodule("wlan", 0);
+//    if (!wlan0) return 0.0;
+//    cModule *radio = wlan0->getSubmodule("radio");
+//    if (!radio) return 0.0;
+//    cModule *tx = radio->getSubmodule("transmitter");
+//    if (!tx) return 0.0;
+//    cPar& p = tx->par("communicationRange");
+//    return p.doubleValue();
+    return 350;
 }
 
 // --- s2: degree centrality (normalized neighbor count) ---

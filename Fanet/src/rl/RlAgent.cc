@@ -247,7 +247,7 @@ void RlAgent::onUpdate()
     double Ec = computeEc();
     double Cf = computeCf();
 
-    RcVector.record(Rc);
+    RcVector.record(1-Rc);
     EcVector.record(Ec);
     CfVector.record(Cf);
 

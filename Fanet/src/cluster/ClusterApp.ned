@@ -6,6 +6,7 @@ import inet.applications.contract.IApp;
 simple ClusterApp like IApp
 {
     parameters:
+        double statsInterval @unit(s) = default(1s);
         int localPort = default(4000);
         int destPort  = default(4000);
         string destAddress = default("10.0.0.255"); // or multicast

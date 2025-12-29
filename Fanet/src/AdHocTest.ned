@@ -8,7 +8,7 @@ import inet.node.contract.INetworkNode;
 import inet.physicallayer.wireless.common.contract.packetlevel.IRadioMedium;
 import inet.visualizer.contract.IIntegratedVisualizer;
 
-network AodvRealAdhoc5
+network AdhocNetwork1
 {
     parameters:
         @display("bgb=1250,1250");
@@ -25,7 +25,7 @@ network AodvRealAdhoc5
         radioMedium: <default("UnitDiskRadioMedium")> like IRadioMedium {
             @display("p=900,700");
         }
-        host[25]: <default("WirelessHostWithMetrics")> like INetworkNode {
+        host[100]: <default("WirelessHostWithMetrics")> like INetworkNode {
              parameters:
                 @display("i=device/cellphone");
                 //mobility.initialY = (index == 0) ? 500m : 100m;

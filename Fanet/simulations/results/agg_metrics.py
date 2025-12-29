@@ -2,38 +2,25 @@
 """
 Aggregate OMNeT++ scavetool CSV-R export across multiple runs.
 
-How to Run:
-    1) Extract values:
-        opp_scavetool export \
-        -F CSV-R \
-        -o all_metrics.csv \
-        -f 'type=~vector AND ("rlReward" OR "e2eDelayPeriodicSec" OR "availability")' \
-        *.vec
-    2) Run:
-        python3 agg_metrics.py all_metrics.csv --time-ms --delay-ms --n-runs 5
-Metrics:
-  - delay: from vector name e2eDelayPeriodicSec
-  - availability: Availability = fraction of hosts that are end-to-end reachable and functional at time t, inferred solely from delay existence.
-  - rlReward: from vector name rlReward
+opp_scavetool export \
+  -F CSV-R \
+  -o all_metrics.csv \
+  -f 'type=~vector AND ("rlReward" OR "e2eDelayPeriodicSec" OR "availability" OR "Ec" OR "Rc" OR "globalNumClusterHeads" OR "TotalClusterMsgSent")' \
+  *.vec
 
-Workflow:
-  1) Expand vectors to long format (rep, host, t, value).
-  2) Per-run aggregation at each t over hosts (mean).
-  3) Overall aggregation at each t across runs (mean + 95% CI using t critical).
-
-Outputs (out/):
-  long_delay.csv                  (rep,host,t,delay_sec)
-  long_availability.csv           (rep,host,t,availability)
-  long_rlreward.csv               (rep,host,t,rlReward)
-  per_run_delay.csv               (rep,t,mean_delay_sec,n_hosts_used)
-  per_run_availability.csv        (rep,t,mean_availability,n_hosts_used)
-  per_run_rlreward.csv            (rep,t,mean_rlReward,n_hosts_used)
-  overall_delay.csv               (t,mean,ci95_low,ci95_high,n_runs_used)    # delay in ms if --delay-ms
-  overall_availability.csv        (t,mean,ci95_low,ci95_high,n_runs_used)
-  overall_rlreward.csv            (t,mean,ci95_low,ci95_high,n_runs_used)
-  plot_delay.png
-  plot_availability.png
-  plot_rlreward.png
+python3 agg_metrics.py all_metrics.csv \
+  --n-runs 5 \
+  --time-ms \
+  --delay-ms \
+  --t-min 5000
+Supports vectors:
+- e2eDelayPeriodicSec (delay)
+- availability (derived from delay existence)
+- rlReward
+- Ec
+- Rc
+- globalNumClusterHeads
+- TotalClusterMsgSent
 """
 
 import argparse
@@ -57,7 +44,6 @@ def parse_host(module_str: str) -> int | None:
     return int(m.group(1)) if m else None
 
 def parse_vec_field(s: str) -> np.ndarray:
-    # vectime/vecvalue are space-separated; may include "NaN"
     if s is None or (isinstance(s, float) and np.isnan(s)):
         return np.array([], dtype=float)
     s = str(s).strip()
@@ -73,7 +59,6 @@ def parse_vec_field(s: str) -> np.ndarray:
     return out
 
 def tcrit_975(df: int) -> float:
-    # 97.5% quantile for Student-t. Hardcode common dfs; fallback to normal approx.
     table = {
         1: 12.706204736432095,
         2: 4.302652729911275,
@@ -91,19 +76,12 @@ def tcrit_975(df: int) -> float:
         30: 2.0422724563012373,
         60: 2.0002978210582616,
     }
-    if df in table:
-        return table[df]
-    return 1.959963984540054
+    return table.get(df, 1.959963984540054)
 
 def clamp0(x: float) -> float:
     return max(0.0, x)
 
 def expand_vectors(dfv: pd.DataFrame, value_col_name: str) -> pd.DataFrame:
-    """
-    Expand vectime/vecvalue rows to long format:
-      rep, host, t, <value_col_name>
-    Keeps NaNs in values (caller decides what to do).
-    """
     records = []
     for _, row in dfv.iterrows():
         t = parse_vec_field(row["vectime"])
@@ -120,9 +98,6 @@ def expand_vectors(dfv: pd.DataFrame, value_col_name: str) -> pd.DataFrame:
     return pd.DataFrame(records, columns=["rep", "host", "t", value_col_name])
 
 def per_run_mean(long_df: pd.DataFrame, value_col: str, out_value_col: str) -> pd.DataFrame:
-    """
-    Mean over hosts at each (rep,t). Drops NaN in value_col.
-    """
     return (
         long_df.replace([np.inf, -np.inf], np.nan)
                .dropna(subset=["t"])
@@ -134,10 +109,6 @@ def per_run_mean(long_df: pd.DataFrame, value_col: str, out_value_col: str) -> p
     )
 
 def overall_mean_ci(per_run_df: pd.DataFrame, per_run_value_col: str, clamp_low_to_zero: bool) -> pd.DataFrame:
-    """
-    For each t: mean across runs of per-run means + 95% CI using t critical.
-    Each run counts equally.
-    """
     overall = (
         per_run_df.groupby("t", as_index=False)
                   .agg(mean=(per_run_value_col, "mean"),
@@ -157,12 +128,12 @@ def overall_mean_ci(per_run_df: pd.DataFrame, per_run_value_col: str, clamp_low_
             ci_high.append(np.nan)
             continue
         se = sd / math.sqrt(n)
-        tcrit = tcrit_975(n - 1)
-        lo = m - tcrit * se
-        hi = m + tcrit * se
+        tc = tcrit_975(n - 1)
+        lo = m - tc * se
+        hi = m + tc * se
         if clamp_low_to_zero:
             lo = clamp0(lo)
-            hi = max(lo, hi)  # keep ordering sane
+            hi = max(lo, hi)
         ci_low.append(lo)
         ci_high.append(hi)
 
@@ -187,18 +158,80 @@ def plot_with_ci(overall_df: pd.DataFrame, x_label: str, y_label: str, title: st
     plt.tight_layout()
     plt.savefig(out_path, dpi=200)
 
+def process_metric(dfv: pd.DataFrame,
+                   vec_name: str,
+                   value_col: str,
+                   per_run_col: str,
+                   out_dir: Path,
+                   keep_reps: list[int],
+                   time_ms: bool,
+                   t_min: float | None,
+                   clamp_low_to_zero: bool,
+                   y_scale: float = 1.0,
+                   y_label: str = "",
+                   plot_file: str = ""):
+    """
+    Generic pipeline:
+      vectors -> long -> (optional time scaling/filter) -> per-run -> overall -> csv + plot
+    """
+    dfm = dfv[dfv["name"] == vec_name].copy()
+    if dfm.empty:
+        return None, None, None
+
+    long_df = expand_vectors(dfm, value_col).replace([np.inf, -np.inf], np.nan).dropna(subset=["t"])
+
+    if time_ms:
+        long_df["t"] *= 1000.0
+
+    if t_min is not None:
+        long_df = long_df[long_df["t"] >= t_min].copy()
+
+    long_df.to_csv(out_dir / f"long_{value_col}.csv", index=False)
+
+    per_run = per_run_mean(long_df, value_col, per_run_col)
+    per_run.to_csv(out_dir / f"per_run_{value_col}.csv", index=False)
+
+    overall = overall_mean_ci(per_run, per_run_col, clamp_low_to_zero=clamp_low_to_zero)
+
+    if y_scale != 1.0:
+        overall["mean"] *= y_scale
+        overall["ci95_low"] *= y_scale
+        overall["ci95_high"] *= y_scale
+
+    overall.to_csv(out_dir / f"overall_{value_col}.csv", index=False)
+
+    xlab = "t (ms)" if time_ms else "t (s)"
+    plot_with_ci(
+        overall,
+        x_label=xlab,
+        y_label=y_label if y_label else value_col,
+        title=f"{vec_name}: mean across runs (reps={keep_reps})",
+        out_path=out_dir / (plot_file if plot_file else f"plot_{value_col}.png"),
+    )
+
+    return long_df, per_run, overall
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("csv", help="scavetool export CSV-R file")
     ap.add_argument("--out", default="out", help="output directory")
+
     ap.add_argument("--delay-name", default="e2eDelayPeriodicSec", help="delay vector name")
     ap.add_argument("--reward-name", default="rlReward", help="reward vector name")
-    ap.add_argument("--reps", default="", help="comma-separated repetition numbers to keep (default: auto-detect first 5)")
+    ap.add_argument("--ec-name", default="Ec", help="energy change vector name (vector name)")
+    ap.add_argument("--rc-name", default="Rc", help="role change vector name (vector name)")
+
+    ap.add_argument("--gch-name", default="globalNumClusterHeads", help="global CH count vector name")
+    ap.add_argument("--gms-name", default="TotalClusterMsgSent", help="global total sent vector name")
+
+    ap.add_argument("--reps", default="", help="comma-separated repetition numbers to keep (default: auto-detect first N)")
     ap.add_argument("--n-runs", type=int, default=5, help="how many distinct reps to keep if --reps not given")
-    ap.add_argument("--exclude-hosts", default="3", help="comma-separated host indices to exclude")
+    ap.add_argument("--exclude-hosts", default="3", help="comma-separated host indices to exclude (still applies to globals; harmless)")
     ap.add_argument("--drop-nonpositive-delay", action="store_true", help="treat delay<=0 as missing (NaN)")
     ap.add_argument("--time-ms", action="store_true", help="convert t from seconds to milliseconds")
     ap.add_argument("--delay-ms", action="store_true", help="convert delay from seconds to milliseconds for output/plot")
+    ap.add_argument("--t-min", type=float, default=5000.0, help="drop samples with t < this (in same unit as --time-ms)")
+
     args = ap.parse_args()
 
     in_path = Path(args.csv)
@@ -207,7 +240,6 @@ def main():
 
     df = pd.read_csv(in_path)
 
-    # only vectors
     dfv = df[df["type"] == "vector"].copy()
     if dfv.empty:
         raise SystemExit("No vector rows found (type != 'vector' everywhere).")
@@ -230,59 +262,39 @@ def main():
     if exclude_hosts:
         dfv = dfv[~dfv["host"].isin(exclude_hosts)].copy()
 
-    # --- delay long ---
+    # t-min in correct units
+    t_min = args.t_min
+    # (caller provides in same unit as --time-ms, already OK)
+
+    # ---- Delay + derived availability ----
     df_delay = dfv[dfv["name"] == args.delay_name].copy()
     if df_delay.empty:
         raise SystemExit(f"No delay vectors found with name={args.delay_name}")
 
-    long_delay = expand_vectors(df_delay, "delay_sec")
-    long_delay = long_delay.replace([np.inf, -np.inf], np.nan).dropna(subset=["t"])
+    long_delay = expand_vectors(df_delay, "delay_sec").replace([np.inf, -np.inf], np.nan).dropna(subset=["t"])
     if args.drop_nonpositive_delay:
         long_delay.loc[long_delay["delay_sec"] <= 0, "delay_sec"] = np.nan
 
-    # derive availability from delay validity (finite => 1, else 0)
-    long_avail = long_delay[["rep", "host", "t"]].copy()
-    long_avail["availability"] = np.isfinite(long_delay["delay_sec"].to_numpy()).astype(float)
-
-    # --- rlReward long ---
-    df_reward = dfv[dfv["name"] == args.reward_name].copy()
-    long_reward = pd.DataFrame(columns=["rep", "host", "t", "rlReward"])
-    if not df_reward.empty:
-        long_reward = expand_vectors(df_reward, "rlReward")
-        long_reward = long_reward.replace([np.inf, -np.inf], np.nan).dropna(subset=["t"])
-
-    # time unit conversion (x axis)
     if args.time_ms:
         long_delay["t"] *= 1000.0
-        long_avail["t"] *= 1000.0
-        if not long_reward.empty:
-            long_reward["t"] *= 1000.0
 
-    long_delay = long_delay[long_delay["t"] >= 5000]
-    long_reward = long_reward[long_reward["t"] >= 5000]
+    if t_min is not None:
+        long_delay = long_delay[long_delay["t"] >= t_min].copy()
 
-    # save longs
     long_delay.to_csv(out_dir / "long_delay.csv", index=False)
-    long_avail.to_csv(out_dir / "long_availability.csv", index=False)
-    if not long_reward.empty:
-        long_reward.to_csv(out_dir / "long_rlreward.csv", index=False)
 
-    # per-run means
+    long_avail = long_delay[["rep", "host", "t"]].copy()
+    long_avail["availability"] = np.isfinite(long_delay["delay_sec"].to_numpy()).astype(float)
+    long_avail.to_csv(out_dir / "long_availability.csv", index=False)
+
     per_run_delay = per_run_mean(long_delay, "delay_sec", "mean_delay_sec")
     per_run_avail = per_run_mean(long_avail, "availability", "mean_availability")
     per_run_delay.to_csv(out_dir / "per_run_delay.csv", index=False)
     per_run_avail.to_csv(out_dir / "per_run_availability.csv", index=False)
 
-    per_run_reward = pd.DataFrame(columns=["rep", "t", "mean_rlReward", "n_hosts_used"])
-    if not long_reward.empty:
-        per_run_reward = per_run_mean(long_reward, "rlReward", "mean_rlReward")
-        per_run_reward.to_csv(out_dir / "per_run_rlreward.csv", index=False)
-
-    # overall means + CI (clamp low >= 0 for delay + availability)
     overall_delay = overall_mean_ci(per_run_delay, "mean_delay_sec", clamp_low_to_zero=True)
     overall_avail = overall_mean_ci(per_run_avail, "mean_availability", clamp_low_to_zero=True)
 
-    # unit conversion for delay y-axis
     if args.delay_ms:
         overall_delay["mean"] *= 1000.0
         overall_delay["ci95_low"] *= 1000.0
@@ -291,38 +303,90 @@ def main():
     overall_delay.to_csv(out_dir / "overall_delay.csv", index=False)
     overall_avail.to_csv(out_dir / "overall_availability.csv", index=False)
 
-    overall_reward = pd.DataFrame(columns=["t", "mean", "ci95_low", "ci95_high", "n_runs_used"])
-    if not long_reward.empty and not per_run_reward.empty:
-        overall_reward = overall_mean_ci(per_run_reward, "mean_rlReward", clamp_low_to_zero=False)
-        overall_reward.to_csv(out_dir / "overall_rlreward.csv", index=False)
-
-    # plots (3 separate graphs)
     xlab = "t (ms)" if args.time_ms else "t (s)"
-
     ylab_delay = "Delay (ms)" if args.delay_ms else "Delay (s)"
+
     plot_with_ci(
-        overall_delay,
-        x_label=xlab,
-        y_label=ylab_delay,
+        overall_delay, x_label=xlab, y_label=ylab_delay,
         title=f"{args.delay_name}: mean across runs (reps={keep_reps})",
         out_path=out_dir / "plot_delay.png",
     )
-
     plot_with_ci(
-        overall_avail,
-        x_label=xlab,
-        y_label="Availability (fraction)",
-        title=f"availability (derived from {args.delay_name} NaN/valid): mean across runs (reps={keep_reps})",
+        overall_avail, x_label=xlab, y_label="Availability (fraction)",
+        title=f"availability (derived from {args.delay_name} validity): mean across runs (reps={keep_reps})",
         out_path=out_dir / "plot_availability.png",
     )
 
-    if not overall_reward.empty:
+    # ---- Other metrics: rlReward, Ec, Rc, globalNumClusterHeads, TotalClusterMsgSent ----
+    # rlReward
+    process_metric(
+        dfv=dfv, vec_name=args.reward_name,
+        value_col="rlReward", per_run_col="mean_rlReward",
+        out_dir=out_dir, keep_reps=keep_reps,
+        time_ms=args.time_ms, t_min=t_min,
+        clamp_low_to_zero=False,
+        y_label="rlReward", plot_file="plot_rlreward.png",
+    )
+
+    # Ec
+    process_metric(
+        dfv=dfv, vec_name=args.ec_name,
+        value_col="Ec", per_run_col="mean_Ec",
+        out_dir=out_dir, keep_reps=keep_reps,
+        time_ms=args.time_ms, t_min=0,
+        clamp_low_to_zero=False,
+        y_label="Ec", plot_file="plot_Ec.png",
+    )
+
+    # Rc
+    process_metric(
+        dfv=dfv, vec_name=args.rc_name,
+        value_col="Rc", per_run_col="mean_Rc",
+        out_dir=out_dir, keep_reps=keep_reps,
+        time_ms=args.time_ms, t_min=t_min,
+        clamp_low_to_zero=True,   # if Rc is a count, clamp low is fine; change if Rc can be negative
+        y_label="Rc", plot_file="plot_Rc.png",
+    )
+
+    # globalNumClusterHeads (still appears per-host in CSV-R; averaging over hosts is fine but redundant)
+    process_metric(
+        dfv=dfv, vec_name=args.gch_name,
+        value_col="globalNumCH", per_run_col="mean_globalNumCH",
+        out_dir=out_dir, keep_reps=keep_reps,
+        time_ms=args.time_ms, t_min=0,
+        clamp_low_to_zero=True,
+        y_label="Global #CH", plot_file="plot_globalNumCH.png",
+    )
+
+    # TotalClusterMsgSent (monotonic counter; mean across hosts makes no sense if every host records same global total.
+    # But if only one host records it, mean still works. Better: take max over hosts per (rep,t).
+    df_gms = dfv[dfv["name"] == args.gms_name].copy()
+    if not df_gms.empty:
+        long_gms = expand_vectors(df_gms, "TotalClusterMsgSent").replace([np.inf, -np.inf], np.nan).dropna(subset=["t"])
+        if args.time_ms:
+            long_gms["t"] *= 1000.0
+        if t_min is not None:
+            long_gms = long_gms[long_gms["t"] >= 0].copy()
+        long_gms.to_csv(out_dir / "long_TotalClusterMsgSent.csv", index=False)
+
+        per_run_gms = (
+            long_gms.dropna(subset=["TotalClusterMsgSent"])
+                    .groupby(["rep", "t"], as_index=False)
+                    .agg(mean_TotalClusterMsgSent=("TotalClusterMsgSent", "max"),  # use max to avoid averaging duplicates
+                         n_hosts_used=("TotalClusterMsgSent", "count"))
+                    .sort_values(["rep", "t"])
+        )
+        per_run_gms.to_csv(out_dir / "per_run_TotalClusterMsgSent.csv", index=False)
+
+        overall_gms = overall_mean_ci(per_run_gms, "mean_TotalClusterMsgSent", clamp_low_to_zero=True)
+        overall_gms.to_csv(out_dir / "overall_TotalClusterMsgSent.csv", index=False)
+
         plot_with_ci(
-            overall_reward,
+            overall_gms,
             x_label=xlab,
-            y_label="rlReward",
-            title=f"{args.reward_name}: mean across runs (reps={keep_reps})",
-            out_path=out_dir / "plot_rlreward.png",
+            y_label="TotalClusterMsgSent",
+            title=f"{args.gms_name}: mean across runs (reps={keep_reps})",
+            out_path=out_dir / "plot_TotalClusterMsgSent.png",
         )
 
 if __name__ == "__main__":

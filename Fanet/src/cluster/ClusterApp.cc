@@ -173,6 +173,7 @@ void ClusterApp::initialize(int stage)
     maxTrials         = par("maxTrials");
     maxClusterSize    = par("maxClusterSize");
     requestTimeout    = par("requestTimeout");
+    statsInterval = par("statsInterval");
 
     auto *node = getContainingNode(this);
     metrics = node->getSubmodule("metrics") ? check_and_cast<NodeMetrics*>(node->getSubmodule("metrics")) : nullptr;
@@ -181,6 +182,10 @@ void ClusterApp::initialize(int stage)
     helloTimer = new cMessage("helloTimer", HELLO_TIMER);
     cfTimer    = new cMessage("cfTimer", CF_TIMER);
     requestTimeoutMsg = new cMessage("requestTimeout", REQ_TIMEOUT);
+    statsTimer = new cMessage("statsTimer", STATS_TIMER);
+
+    v_globalNumCH.setName("globalNumClusterHeads");
+    v_totalMsgSent.setName("TotalClusterMsgSent");
 }
 
 void ClusterApp::handleStartOperation(LifecycleOperation *operation)
@@ -194,14 +199,53 @@ void ClusterApp::handleStartOperation(LifecycleOperation *operation)
         socket.joinMulticastGroup(destAddr);
     }
 
+    scheduleAt(simTime() + statsInterval, statsTimer);
     scheduleAt(simTime(), helloTimer);
     scheduleAt(simTime() + uniform(0, cfInterval), cfTimer);
 }
+
+static ClusterApp* findClusterApp(cModule *host)
+{
+    if (!host) return nullptr;
+    // assumes app[0] is ClusterApp; adjust if needed
+    cModule *apps = host->getSubmodule("app", 0) ? host : host; // no-op, keep simple
+    for (cModule::SubmoduleIterator it(host); !it.end(); ++it) {
+        // nothing
+    }
+    // direct: host.app[0] is ClusterApp in your ini
+    cModule *app0 = host->getSubmodule("app", 0);
+    if (!app0) return nullptr;
+    return dynamic_cast<ClusterApp*>(app0);
+}
+
+int ClusterApp::globalCountClusterHeads() const
+{
+    int cnt = 0;
+    cModule *network = getSystemModule();
+
+    for (cModule::SubmoduleIterator it(network); !it.end(); ++it) {
+        cModule *m = *it;
+
+        // keep the same “host filter” style you use: require mobility
+        if (!m->getSubmodule("mobility"))
+            continue;
+
+        ClusterApp *app = findClusterApp(m);
+        if (!app)
+            continue;
+
+        if (app->getRole() == ROLE_CH)
+            cnt++;
+    }
+    return cnt;
+}
+
 
 void ClusterApp::finish()
 {
     std::cout << this->nodeId() << " " << role << " "<< currentClusterHeadId << std::endl;
     ApplicationBase::finish();
+    cancelAndDelete(statsTimer);
     cancelAndDelete(helloTimer);
     cancelAndDelete(cfTimer);
     cancelAndDelete(requestTimeoutMsg);
@@ -251,6 +295,14 @@ void ClusterApp::handleMessageWhenUp(cMessage *msg)
                 becomeClusterHead();
             }
             break;
+        case STATS_TIMER:
+            int gch = globalCountClusterHeads();
+
+            v_globalNumCH.record(gch);
+            v_totalMsgSent.record(totalMsgSent);
+
+            scheduleAt(simTime() + statsInterval, msg);
+            break;
         }
         return;
     }
@@ -281,7 +333,7 @@ void ClusterApp::handleMessageWhenUp(cMessage *msg)
 void ClusterApp::sendClusterMsg(int kind, int dstId, int chId, double util, double hld, L3Address dest)
 {
    // logCluster("SEND", kind, dstId, util, hld);
-
+    totalMsgSent++;
     auto pk = new Packet("CLUSTER");
     auto hdr = makeShared<ClusterHeader>();
     hdr->setKind(kind);
@@ -446,16 +498,20 @@ void ClusterApp::handleClusterPacket(Packet *pk)
 
 double ClusterApp::readCommRange() const
 {
-    cModule *node = getContainingNode(const_cast<ClusterApp*>(this));
-
-    cModule *wlan0 = node->getSubmodule("wlan", 0);
-    if (!wlan0) return 0.0;
-    cModule *radio = wlan0->getSubmodule("radio");
-    if (!radio) return 0.0;
-    cModule *tx = radio->getSubmodule("transmitter");
-    if (!tx) return 0.0;
-    cPar& p = tx->par("communicationRange");
-    return p.doubleValue();   // meters
+//    try{
+//        cModule *node = getContainingNode(const_cast<ClusterApp*>(this));
+//
+//        cModule *wlan0 = node->getSubmodule("wlan", 0);
+//        if (!wlan0) return 0.0;
+//        cModule *radio = wlan0->getSubmodule("radio");
+//        if (!radio) return 0.0;
+//        cModule *tx = radio->getSubmodule("transmitter");
+//        if (!tx) return 0.0;
+//        cPar& p = tx->par("communicationRange");
+//        return p.doubleValue();   // meters
+//    }catch(int i){
+        return 350;
+//    }
 }
 
 void ClusterApp::pseudo_broadcast(int kind, int dstId, int chId, double util, double hld)
